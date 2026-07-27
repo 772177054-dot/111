@@ -13,19 +13,19 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install requests
-      - name: Run harvest and save log
+      - name: Run harvest and preserve partial results
+        continue-on-error: true
         shell: bash
         run: |
           mkdir -p results
-          set +e
-          python harvest.py > results/run.log 2>&1
-          code=$?
-          echo "exit_code=$code" > results/exit_status.txt
-          cat results/run.log
-          exit 0
-      - uses: actions/upload-artifact@v4
-        if: always()
+          python harvest.py > results/run.log 2>&1 || echo "python_exit_code=$?" > results/exit_status.txt
+          test -f results/exit_status.txt || echo "python_exit_code=0" > results/exit_status.txt
+          tail -n 300 results/run.log || true
+      - name: Upload harvest results
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
         with:
           name: circbank-harvest-results
           path: results/
+          if-no-files-found: warn
           retention-days: 7
