@@ -3,12 +3,17 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   harvest:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: tmp-circbank-full-harvest-20260727
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -18,17 +23,27 @@ jobs:
         run: |
           base64 -d harvest_v2.py.gz.b64 | gzip -dc > harvest_v2.py
           python -m py_compile harvest_v2.py
-      - name: Run harvest and preserve partial results
-        continue-on-error: true
+      - name: Run harvest and preserve results
         shell: bash
         run: |
           mkdir -p results
-          python harvest_v2.py > results/run.log 2>&1 || true
-          test -f results/exit_status.txt || echo "python_exit_code=unknown" > results/exit_status.txt
+          set +e
+          python harvest_v2.py > results/run.log 2>&1
+          code=$?
+          echo "python_exit_code=$code" > results/exit_status.txt
           tail -n 300 results/run.log || true
+          exit 0
+      - name: Commit results to branch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f results/
+          git commit -m "Add circBank harvest results" || true
+          git push origin HEAD:tmp-circbank-full-harvest-20260727
       - name: Upload harvest results
         uses: actions/upload-artifact@v4
-        if: ${{ always() }}
+        if: always()
         with:
           name: circbank-harvest-results
           path: results/
