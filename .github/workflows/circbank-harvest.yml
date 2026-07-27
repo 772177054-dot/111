@@ -1,0 +1,21 @@
+name: circBank strict harvest
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - run: python harvest.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: circbank-harvest-results
+          path: results/
+          retention-days: 7
