@@ -1,0 +1,76 @@
+name: circBank retry failed chunks
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  harvest:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {key: hsa, chunk: 0, total: 32}
+          - {key: hsa, chunk: 8, total: 32}
+          - {key: hsa, chunk: 16, total: 32}
+          - {key: hsa, chunk: 24, total: 32}
+          - {key: hsa, chunk: 3, total: 32}
+          - {key: hsa, chunk: 11, total: 32}
+          - {key: hsa, chunk: 19, total: 32}
+          - {key: hsa, chunk: 27, total: 32}
+          - {key: hsa, chunk: 4, total: 32}
+          - {key: hsa, chunk: 12, total: 32}
+          - {key: hsa, chunk: 20, total: 32}
+          - {key: hsa, chunk: 28, total: 32}
+          - {key: mmu, chunk: 3, total: 16}
+          - {key: mmu, chunk: 7, total: 16}
+          - {key: mmu, chunk: 11, total: 16}
+          - {key: mmu, chunk: 15, total: 16}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-circbank-full-harvest-20260727
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Run ${{ matrix.key }} retry chunk ${{ matrix.chunk }}
+        env:
+          SPECIES_KEY: ${{ matrix.key }}
+          CHUNK_INDEX: ${{ matrix.chunk }}
+          CHUNK_TOTAL: ${{ matrix.total }}
+        shell: bash
+        run: |
+          tag="${SPECIES_KEY}-part$((CHUNK_INDEX+1))of${CHUNK_TOTAL}"
+          mkdir -p "results/$tag"
+          set +e
+          timeout 300m python harvest_species.py > "results/$tag/run.log" 2>&1
+          code=$?
+          echo "python_exit_code=$code" > "results/$tag/exit_status.txt"
+          tail -n 100 "results/$tag/run.log" || true
+          exit 0
+      - name: Upload retry result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: circbank-retry-${{ matrix.key }}-${{ matrix.chunk }}
+          path: results/
+          if-no-files-found: error
+          retention-days: 7
+  aggregate:
+    needs: harvest
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: circbank-retry-*
+          path: combined
+      - run: find combined -type f -print | sort
+      - uses: actions/upload-artifact@v4
+        with:
+          name: circbank-retry-results
+          path: combined/
+          if-no-files-found: error
+          retention-days: 7
