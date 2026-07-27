@@ -1,0 +1,72 @@
+name: circBank big species harvest
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  harvest:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {key: hsa, chunk: 0, total: 8}
+          - {key: hsa, chunk: 1, total: 8}
+          - {key: hsa, chunk: 2, total: 8}
+          - {key: hsa, chunk: 3, total: 8}
+          - {key: hsa, chunk: 4, total: 8}
+          - {key: hsa, chunk: 5, total: 8}
+          - {key: hsa, chunk: 6, total: 8}
+          - {key: hsa, chunk: 7, total: 8}
+          - {key: mmu, chunk: 0, total: 4}
+          - {key: mmu, chunk: 1, total: 4}
+          - {key: mmu, chunk: 2, total: 4}
+          - {key: mmu, chunk: 3, total: 4}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-circbank-full-harvest-20260727
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Run ${{ matrix.key }} chunk ${{ matrix.chunk }}
+        env:
+          SPECIES_KEY: ${{ matrix.key }}
+          CHUNK_INDEX: ${{ matrix.chunk }}
+          CHUNK_TOTAL: ${{ matrix.total }}
+        shell: bash
+        run: |
+          tag="${SPECIES_KEY}-part$((CHUNK_INDEX+1))of${CHUNK_TOTAL}"
+          mkdir -p "results/$tag"
+          set +e
+          timeout 200m python harvest_species.py > "results/$tag/run.log" 2>&1
+          code=$?
+          echo "python_exit_code=$code" > "results/$tag/exit_status.txt"
+          tail -n 100 "results/$tag/run.log" || true
+          exit 0
+      - name: Upload chunk result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: circbank-${{ matrix.key }}-${{ matrix.chunk }}
+          path: results/
+          if-no-files-found: error
+          retention-days: 7
+  aggregate:
+    needs: harvest
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: circbank-*
+          path: combined
+      - run: find combined -type f -print | sort
+      - uses: actions/upload-artifact@v4
+        with:
+          name: circbank-big-results
+          path: combined/
+          if-no-files-found: error
+          retention-days: 7
