@@ -13,8 +13,18 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install requests
-      - run: python harvest.py
+      - name: Run harvest and save log
+        shell: bash
+        run: |
+          mkdir -p results
+          set +e
+          python harvest.py > results/run.log 2>&1
+          code=$?
+          echo "exit_code=$code" > results/exit_status.txt
+          cat results/run.log
+          exit 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: circbank-harvest-results
           path: results/
