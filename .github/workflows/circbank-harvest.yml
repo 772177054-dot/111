@@ -5,8 +5,12 @@ on:
   workflow_dispatch:
 jobs:
   harvest:
+    strategy:
+      fail-fast: false
+      matrix:
+        key: [hsa, mmu, rno, hgl, xtr, dre, dme, cel, ath, sce]
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
         with:
@@ -15,27 +19,40 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install requests
-      - name: Decode robust harvester
+      - name: Run strict harvest for ${{ matrix.key }}
         shell: bash
+        env:
+          SPECIES_KEY: ${{ matrix.key }}
         run: |
-          base64 -d harvest_v2.py.gz.b64 | gzip -dc > harvest_v2.py
-          python -m py_compile harvest_v2.py
-      - name: Run harvest and preserve results
-        shell: bash
-        continue-on-error: true
-        run: |
-          mkdir -p results
+          mkdir -p results/${{ matrix.key }}
           set +e
-          python harvest_v2.py > results/run.log 2>&1
+          python harvest_species.py > results/${{ matrix.key }}/run.log 2>&1
           code=$?
-          echo "python_exit_code=$code" > results/exit_status.txt
-          tail -n 500 results/run.log || true
+          echo "python_exit_code=$code" > results/${{ matrix.key }}/exit_status.txt
+          tail -n 200 results/${{ matrix.key }}/run.log || true
           exit 0
-      - name: Upload harvest results
+      - name: Upload species result
         uses: actions/upload-artifact@v4
         if: always()
         with:
+          name: circbank-${{ matrix.key }}
+          path: results/${{ matrix.key }}/
+          if-no-files-found: error
+          retention-days: 7
+  aggregate:
+    needs: harvest
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: circbank-*
+          path: combined
+      - name: List combined files
+        run: find combined -maxdepth 3 -type f -print | sort
+      - uses: actions/upload-artifact@v4
+        with:
           name: circbank-harvest-results
-          path: results/
+          path: combined/
           if-no-files-found: error
           retention-days: 7
