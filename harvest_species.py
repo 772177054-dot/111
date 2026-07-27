@@ -15,10 +15,13 @@ SPECIES={
 KEY=os.environ.get('SPECIES_KEY') or (sys.argv[1] if len(sys.argv)>1 else '')
 if KEY not in SPECIES: raise SystemExit(f'Unknown species key: {KEY}')
 SP,TAX=SPECIES[KEY]
-OUT=Path('results')/KEY; OUT.mkdir(parents=True,exist_ok=True)
+CHUNK_TOTAL=max(1,int(os.environ.get('CHUNK_TOTAL','1')))
+CHUNK_INDEX=int(os.environ.get('CHUNK_INDEX','0'))
+TAG=f'{KEY}-part{CHUNK_INDEX+1}of{CHUNK_TOTAL}' if CHUNK_TOTAL>1 else KEY
+OUT=Path('results')/TAG; OUT.mkdir(parents=True,exist_ok=True)
 CACHE=Path('cache')/KEY; CACHE.mkdir(parents=True,exist_ok=True)
 EUTIL='https://eutils.ncbi.nlm.nih.gov/entrez/eutils'; GEO='https://ftp.ncbi.nlm.nih.gov/geo/series'; ENA='https://www.ebi.ac.uk/ena/portal/api/search'
-S=requests.Session(); S.headers['User-Agent']='circBank2.0-update/2.1 academic contact: circbank@example.org'
+S=requests.Session(); S.headers['User-Agent']='circBank2.0-update/2.2 academic contact: circbank@example.org'
 EXCL={
 'polyA/oligo-dT':[r'poly\s*[-_]?\s*\(?a\)?',r'poly\s*[-_]?\s*d?t',r'oligo\s*\(?d?t\)?',r'\bmrna\s*[-_ ]?seq\b',r'mrna\s*(selection|enrichment|capture)'],
 'single-cell':[r'single\s*[-_ ]?cell',r'\bscrna\b',r'single\s*[-_ ]?nucleus',r'\b10\s*x\b',r'10x\s*genomics',r'chromium',r'smart\s*[-_ ]?seq',r'cel\s*[-_ ]?seq'],
@@ -27,7 +30,7 @@ EXCL={
 CTRL=re.compile(r'\b(wild\s*[- ]?type|wildtype|\bwt\b|untreated|control|normal|mock|vehicle)\b',re.I)
 PERT=re.compile(r'\b(knockout|knock\s*down|crispr|treated|treatment|infect|disease|tumou?r|cancer|mutant|overexpress|drug)\b',re.I)
 
-def get(url,params=None,tries=7,timeout=180):
+def get(url,params=None,tries=5,timeout=180):
     err=None
     for i in range(tries):
         try:
@@ -35,7 +38,7 @@ def get(url,params=None,tries=7,timeout=180):
             if r.status_code==200:return r
             err=RuntimeError(f'{r.status_code} {r.url} {r.text[:300]}')
         except Exception as e: err=e
-        time.sleep(min(60,2**i))
+        time.sleep(min(20,2**i))
     raise err
 
 def esearch():
@@ -62,7 +65,7 @@ def parse_soft(g):
     cp=CACHE/f'{g}.soft.gz'
     if cp.exists(): raw=cp.read_bytes()
     else:
-        raw=get(soft_url(g),timeout=600).content; cp.write_bytes(raw)
+        raw=get(soft_url(g),timeout=300).content; cp.write_bytes(raw)
     txt=gzip.decompress(raw).decode('utf-8','replace')
     ser={'gse':g}; samples={}; cur=None
     for line in txt.splitlines():
@@ -86,16 +89,15 @@ def pubdate(ser):
         except:pass
     return s
 
-def srxs(sample):
+def exps(sample):
     text=' ; '.join(flat(v) for v in sample.values())
     return sorted(set(re.findall(r'(?:SRX|ERX|DRX)\d+',text)))
 
-def exclusion(text):
-    return [lab for lab,pats in EXCL.items() if any(re.search(p,text,re.I) for p in pats)]
+def exclusion(text):return [lab for lab,pats in EXCL.items() if any(re.search(p,text,re.I) for p in pats)]
 
 def ena(exp):
     fields='run_accession,experiment_accession,study_accession,secondary_study_accession,sample_accession,secondary_sample_accession,scientific_name,tax_id,first_public,library_strategy,library_source,library_selection,library_layout,instrument_platform,instrument_model,base_count,read_count,fastq_ftp,fastq_bytes'
-    r=get(ENA,{'result':'read_run','query':f'experiment_accession="{exp}"','fields':fields,'format':'tsv','limit':0},timeout=300)
+    r=get(ENA,{'result':'read_run','query':f'experiment_accession="{exp}"','fields':fields,'format':'tsv','limit':0},timeout=180)
     return list(csv.DictReader(io.StringIO(r.text),delimiter='\t'))
 
 def tissue(s):
@@ -118,16 +120,17 @@ def write(name,rows):
         w=csv.DictWriter(f,fieldnames=keys);w.writeheader();w.writerows(rows)
 
 def main():
-    term,ids=esearch();gses=esummary(ids)
-    (OUT/'query.json').write_text(json.dumps({'species':SP,'tax_id':TAX,'term':term,'gds_ids':len(ids),'gses':len(gses)},ensure_ascii=False,indent=2),encoding='utf-8')
+    term,ids=esearch();all_gses=esummary(ids)
+    gses=[g for i,g in enumerate(all_gses) if i%CHUNK_TOTAL==CHUNK_INDEX]
+    (OUT/'query.json').write_text(json.dumps({'species':SP,'tax_id':TAX,'term':term,'gds_ids':len(ids),'all_gses':len(all_gses),'chunk_total':CHUNK_TOTAL,'chunk_index':CHUNK_INDEX,'chunk_gses':len(gses)},ensure_ascii=False,indent=2),encoding='utf-8')
     allser={};allsam={};soft_errors=[]
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=10) as ex:
         fut={ex.submit(parse_soft,g):g for g in gses}
         for i,f in enumerate(as_completed(fut),1):
             g=fut[f]
             try:ser,sam=f.result();allser[g]=ser;allsam.update(sam)
             except Exception as e:soft_errors.append({'species':SP,'gse':g,'error':str(e),'url':soft_url(g)})
-            if i%50==0:print(KEY,'SOFT',i,len(gses),flush=True)
+            if i%50==0:print(TAG,'SOFT',i,len(gses),flush=True)
     pre=[];excluded=[]
     for gsm,s in allsam.items():
         g=s['gse'];ser=allser[g];pd=pubdate(ser)
@@ -137,17 +140,17 @@ def main():
         txt=' ; '.join(flat(v) for v in list(s.values())+list(ser.values()))
         bad=exclusion(txt)
         if bad:excluded.append({'species':SP,'gse':g,'gsm':gsm,'stage':'metadata','reason':'；'.join(bad)});continue
-        exps=srxs(s)
-        if len(exps)!=1:excluded.append({'species':SP,'gse':g,'gsm':gsm,'stage':'link','reason':f'Experiment count={len(exps)}'});continue
-        pre.append((g,gsm,exps[0],ser,s,txt,pd))
+        ee=exps(s)
+        if len(ee)!=1:excluded.append({'species':SP,'gse':g,'gsm':gsm,'stage':'link','reason':f'Experiment count={len(ee)}'});continue
+        pre.append((g,gsm,ee[0],ser,s,txt,pd))
     exp_list=sorted(set(x[2] for x in pre)); runmap={}
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=20) as ex:
         fut={ex.submit(ena,x):x for x in exp_list}
         for i,f in enumerate(as_completed(fut),1):
             x=fut[f]
             try:runmap[x]=f.result()
             except Exception as e:runmap[x]=[];excluded.append({'species':SP,'srx':x,'stage':'ENA','reason':str(e)})
-            if i%100==0:print(KEY,'ENA',i,len(exp_list),flush=True)
+            if i%100==0:print(TAG,'ENA',i,len(exp_list),flush=True)
     eligible=[];review=[]
     for g,gsm,exp,ser,s,txt,pd in pre:
         runs=runmap.get(exp,[])
@@ -156,11 +159,9 @@ def main():
         strategy=(r.get('library_strategy') or '').strip();source=(r.get('library_source') or '').strip();selection=(r.get('library_selection') or '').strip()
         if (r.get('library_layout') or '').upper()!='PAIRED':why.append('非双端')
         if (r.get('instrument_platform') or '').upper() not in ('ILLUMINA','BGISEQ'):why.append('平台不符')
-        if strategy not in ('RNA-Seq','ncRNA-Seq','OTHER'):
-            why.append('strategy不符')
+        if strategy not in ('RNA-Seq','ncRNA-Seq','OTHER'):why.append('strategy不符')
         elif strategy=='OTHER':manual.append('LibraryStrategy=OTHER')
-        if source.upper() not in ('TRANSCRIPTOMIC','OTHER'):
-            why.append('source不符')
+        if source.upper() not in ('TRANSCRIPTOMIC','OTHER'):why.append('source不符')
         elif source.upper()=='OTHER':manual.append('LibrarySource=OTHER')
         fq=[x for x in (r.get('fastq_ftp') or '').split(';') if x]
         if len(fq)!=2:why.append(f'FASTQ数={len(fq)}')
@@ -175,7 +176,6 @@ def main():
         score=(bases/1e9-3)*2+(rl-150)*2+(20 if pri=='优先' else 10 if pri=='中等' else 0)+(5 if strategy!='OTHER' else -5)+(5 if source.upper()!='OTHER' else -5)
         base.update({'priority':pri,'quality_score':round(score,2),'screen_status':'人工复核' if manual else '自动通过','manual_review_reason':'；'.join(manual)})
         (review if manual else eligible).append(base)
-    # Representative selection only from automatic pass; manual review remains separate.
     selected=[]; groups=defaultdict(list)
     for x in eligible:groups[(x['species'],x['tissue'])].append(x)
     for key,rows in groups.items():
@@ -186,7 +186,7 @@ def main():
             for srank,x in enumerate(sorted(rr,key=lambda y:-y['quality_score'])[:3],1):
                 z=dict(x);z['selection_reason']=f'{key[0]}/{key[1]}第{grank}个GSE；GSE内第{srank}个样本';selected.append(z)
     write('01_selected.csv',selected);write('02_auto_pass.csv',eligible);write('03_other_review.csv',review);write('04_excluded.csv',excluded);write('05_soft_errors.csv',soft_errors)
-    summary={'species':SP,'start':START,'end':END,'GSE_discovered':len(gses),'GSE_soft_loaded':len(allser),'GEO_samples_total':len(allsam),'GEO_SRA_pre_candidates':len(pre),'auto_pass_GSE':len(set(x['gse'] for x in eligible)),'auto_pass_GSM':len(set(x['gsm'] for x in eligible)),'auto_pass_runs':len(set(x['run'] for x in eligible)),'manual_review_GSE':len(set(x['gse'] for x in review)),'manual_review_GSM':len(set(x['gsm'] for x in review)),'manual_review_runs':len(set(x['run'] for x in review)),'selected_GSE':len(set(x['gse'] for x in selected)),'selected_GSM':len(set(x['gsm'] for x in selected)),'selected_runs':len(set(x['run'] for x in selected)),'excluded_records':len(excluded),'soft_errors':len(soft_errors)}
+    summary={'species':SP,'tag':TAG,'start':START,'end':END,'GSE_discovered_all':len(all_gses),'GSE_in_chunk':len(gses),'GSE_soft_loaded':len(allser),'GEO_samples_total':len(allsam),'GEO_SRA_pre_candidates':len(pre),'auto_pass_GSE':len(set(x['gse'] for x in eligible)),'auto_pass_GSM':len(set(x['gsm'] for x in eligible)),'auto_pass_runs':len(set(x['run'] for x in eligible)),'manual_review_GSE':len(set(x['gse'] for x in review)),'manual_review_GSM':len(set(x['gsm'] for x in review)),'manual_review_runs':len(set(x['run'] for x in review)),'selected_GSE':len(set(x['gse'] for x in selected)),'selected_GSM':len(set(x['gsm'] for x in selected)),'selected_runs':len(set(x['run'] for x in selected)),'excluded_records':len(excluded),'soft_errors':len(soft_errors)}
     (OUT/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8');print(json.dumps(summary,ensure_ascii=False,indent=2))
 
 try:main()
