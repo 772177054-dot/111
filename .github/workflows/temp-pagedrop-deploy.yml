@@ -23,7 +23,7 @@ jobs:
           html = Path('preview/circbank/index.html').read_text(encoding='utf-8')
           print(json.dumps({'html': html, 'title': 'circBank Interactive Preview', 'ttl': '7d'}, ensure_ascii=False))
           PY
-          curl -fsS -X POST 'https://pagedrop.dev/api/v1/sites' -H 'Content-Type: application/json' --data-binary @payload.json | tee deployment.json
+          curl -fsS -X POST 'https://freekit.dev/api/v1/sites' -H 'Content-Type: application/json' --data-binary @payload.json | tee deployment.json
           python - <<'PY'
           import json, os
           from pathlib import Path
