@@ -1,0 +1,58 @@
+name: circBank strict harvest
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  harvest:
+    strategy:
+      fail-fast: false
+      matrix:
+        key: [hsa, mmu, rno, hgl, xtr, dre, dme, cel, ath, sce]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-circbank-full-harvest-20260727
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Run strict harvest for ${{ matrix.key }}
+        shell: bash
+        env:
+          SPECIES_KEY: ${{ matrix.key }}
+        run: |
+          mkdir -p results/${{ matrix.key }}
+          set +e
+          python harvest_species.py > results/${{ matrix.key }}/run.log 2>&1
+          code=$?
+          echo "python_exit_code=$code" > results/${{ matrix.key }}/exit_status.txt
+          tail -n 200 results/${{ matrix.key }}/run.log || true
+          exit 0
+      - name: Upload species result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: circbank-${{ matrix.key }}
+          path: results/${{ matrix.key }}/
+          if-no-files-found: error
+          retention-days: 7
+  aggregate:
+    needs: harvest
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: circbank-*
+          path: combined
+      - name: List combined files
+        run: find combined -maxdepth 3 -type f -print | sort
+      - uses: actions/upload-artifact@v4
+        with:
+          name: circbank-harvest-results
+          path: combined/
+          if-no-files-found: error
+          retention-days: 7

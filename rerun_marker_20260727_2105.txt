@@ -1,0 +1,1 @@
+Trigger a fresh strict circBank harvest run after artifact-upload hardening.
