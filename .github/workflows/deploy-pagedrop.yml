@@ -1,0 +1,45 @@
+name: Deploy circBank preview to PageDrop
+
+on:
+  push:
+    branches:
+      - chatgpt-circbank-preview-20260813
+    paths:
+      - '.github/workflows/deploy-pagedrop.yml'
+      - 'preview/circbank/index.html'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy HTML to PageDrop
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' > payload.json
+          import json
+          from pathlib import Path
+          html = Path('preview/circbank/index.html').read_text(encoding='utf-8')
+          print(json.dumps({
+              'html': html,
+              'title': 'circBank Interactive Preview',
+              'ttl': '7d'
+          }, ensure_ascii=False))
+          PY
+          curl -fsS -X POST 'https://pagedrop.dev/api/v1/sites' \
+            -H 'Content-Type: application/json' \
+            --data-binary @payload.json | tee deployment.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('deployment.json').read_text())['data']
+          print('LIVE_URL=' + data['url'])
+          print('SITE_ID=' + data['siteId'])
+          print('EXPIRES_AT=' + str(data.get('expiresAt')))
+          print('DELETE_TOKEN=' + data['deleteToken'])
+          with open(__import__('os').environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as f:
+              f.write('## circBank preview\n\n')
+              f.write(f"Live URL: {data['url']}\n\n")
+              f.write(f"Expires: {data.get('expiresAt')}\n")
+          PY
